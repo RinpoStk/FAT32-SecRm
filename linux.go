@@ -15,14 +15,14 @@ import (
 
 const Segment = `/`
 
-type DefalutDriver struct {
+type DefaultDriver struct {
 	Fd        int
 	Prefix    string
 	BPRSector *FAT32BootSector
 	Offset    *FAT32Offset
 }
 
-func (d *DefalutDriver) DInit(absFileName string) error {
+func (d *DefaultDriver) DInit(absFileName string) error {
 	device, mountPoint, err := getMount(absFileName)
 	if err != nil {
 		return err
@@ -45,7 +45,7 @@ func (d *DefalutDriver) DInit(absFileName string) error {
 	return UpdateFAT(d, 0)
 }
 
-func (d *DefalutDriver) ReadSector(sectorNum uint64, readNum uint16) ([]byte, error) {
+func (d *DefaultDriver) ReadSector(sectorNum uint64, readNum uint16) ([]byte, error) {
 	bufferSize := d.BPRSector.BytesPerSector * readNum
 
 	buffer := make([]byte, bufferSize)
@@ -61,7 +61,7 @@ func (d *DefalutDriver) ReadSector(sectorNum uint64, readNum uint16) ([]byte, er
 	return buffer[:bytesRead], nil
 }
 
-func (d *DefalutDriver) WriteData(data []byte, sectorNum uint64, offset uint16) error {
+func (d *DefaultDriver) WriteData(data []byte, sectorNum uint64, offset uint16) error {
 	offsetByte := int64(offset) * int64(sectorNum) * int64(d.BPRSector.BytesPerSector)
 	_, err := syscall.Pwrite(d.Fd, data, offsetByte)
 	if err != nil {
@@ -70,7 +70,7 @@ func (d *DefalutDriver) WriteData(data []byte, sectorNum uint64, offset uint16) 
 	return nil
 }
 
-func (d *DefalutDriver) DDestroy() error {
+func (d *DefaultDriver) DDestroy() error {
 	return syscall.Close(d.Fd)
 }
 

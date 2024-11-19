@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf16"
 )
@@ -63,7 +65,7 @@ func listFiles(root string) ([]string, error) {
 }
 
 // getDirEntry 依据路径获取最后一个目录项与目录项对应的偏移
-func getDirEntry(driver *DefalutDriver, filePath string) (*FAT32DirEntry, []*DirEntryOffset, error) {
+func getDirEntry(driver *DefaultDriver, filePath string) (*FAT32DirEntry, []*DirEntryOffset, error) {
 	filePathArr := strings.Split(filePath, Segment)
 	dEntry := &FAT32DirEntry{ClusterLow: 2}
 	var dEntryOffset []*DirEntryOffset
@@ -83,7 +85,7 @@ func getDirEntry(driver *DefalutDriver, filePath string) (*FAT32DirEntry, []*Dir
 }
 
 // findDirEntry 依据文件名搜索目录项
-func findDirEntry(driver *DefalutDriver, dEntryLL []uint32, targetFile string) (*FAT32DirEntry, []*DirEntryOffset, error) {
+func findDirEntry(driver *DefaultDriver, dEntryLL []uint32, targetFile string) (*FAT32DirEntry, []*DirEntryOffset, error) {
 	const dEntryChunkSize = 32
 
 	for _, cluster := range dEntryLL {
@@ -184,8 +186,7 @@ func findDirEntry(driver *DefalutDriver, dEntryLL []uint32, targetFile string) (
 	return nil, nil, errors.New("not found")
 }
 
-func doRemoveFile(driver *DefalutDriver, dEntry *FAT32DirEntry, dEntryOffsets []*DirEntryOffset) error {
-	// fmt.Println(dEntryOffset)
+func doRemoveFile(driver *DefaultDriver, dEntry *FAT32DirEntry, dEntryOffsets []*DirEntryOffset) error {
 	for i, offset := range dEntryOffsets {
 		if i != len(dEntryOffsets)-1 {
 			err := rmDEntry(driver, offset)
@@ -200,14 +201,17 @@ func doRemoveFile(driver *DefalutDriver, dEntry *FAT32DirEntry, dEntryOffsets []
 				}
 			} else {
 				fat32LL, err := getFATLink(driver, (uint32(dEntry.ClusterHigh)<<16)+uint32(dEntry.ClusterLow))
+				sort.Slice(fat32LL, func(i, j int) bool {
+					return fat32LL[i] < fat32LL[j]
+				})
 				if err != nil {
 					return err
 				}
-				err = cleanFileContent(fat32LL)
+				err = cleanFileContent(driver, fat32LL)
 				if err != nil {
 					return err
 				}
-				err = rmFAT32Link(fat32LL)
+				err = rmFAT32Link(driver, fat32LL)
 				if err != nil {
 					return err
 				}
@@ -222,24 +226,75 @@ func doRemoveFile(driver *DefalutDriver, dEntry *FAT32DirEntry, dEntryOffsets []
 }
 
 // rmDEntry 将目录项标记为已删除
-func rmDEntry(driver *DefalutDriver, dEntryOffset *DirEntryOffset) error {
-	fmt.Println(dEntryOffset)
+func rmDEntry(driver *DefaultDriver, dEntryOffset *DirEntryOffset) error {
+	sectorNum := dEntryOffset.ClusterNumber*uint32(driver.BPRSector.SectorsPerCluster) + driver.Offset.Data
+	buf, err := driver.ReadSector(uint64(sectorNum), 1)
+	if err != nil {
+		return err
+	}
+	buf[dEntryOffset.Offset] = 0xe5
+	fmt.Println(hex.EncodeToString(buf))
+	//err = driver.WriteData(buf, uint64(sectorNum), 0)
+	//if err != nil {
+	//	return err
+	//}
 	return nil
 }
 
 // rmFAT32Link 删除指定的fat32链
-func rmFAT32Link(fat32LL []uint32) error {
+func rmFAT32Link(driver *DefaultDriver, fat32LL []uint32) error {
+	sectorNum := fat32LL[0]/128 + uint32(driver.Offset.DEntry)
+	buf, err := driver.ReadSector(uint64(sectorNum), 1)
+	if err != nil {
+		return err
+	}
+	for _, i := range fat32LL {
+		if i == 0x0fffffff {
+			//err = driver.WriteData(buf, uint64(sectorNum), 0)
+			//if err != nil {
+			//	return err
+			//}
+			fmt.Println(hex.EncodeToString(buf))
+			break
+		}
+		if sectorNum != i/128+uint32(driver.Offset.DEntry) {
+			//err = driver.WriteData(buf, uint64(sectorNum), 0)
+			//if err != nil {
+			//	return err
+			//}
+			fmt.Println(hex.EncodeToString(buf))
+			sectorNum = i/128 + uint32(driver.Offset.DEntry)
+			buf, err = driver.ReadSector(uint64(sectorNum), 1)
+			if err != nil {
+				return err
+			}
+		}
+		offset := (i % 128) * 4
+		copy(buf[offset:], []byte{0, 0, 0, 0})
+	}
 	return nil
 }
 
 // cleanFileContent 依据fat32表簇号链清空文件内容
-func cleanFileContent(fat32LL []uint32) error {
-
+func cleanFileContent(driver *DefaultDriver, fat32LL []uint32) error {
+	//buf := make([]byte, 512)
+	for _, i := range fat32LL {
+		if i == 0x0fffffff {
+			break
+		}
+		for j := 0; j < 8; j++ {
+			//fmt.Println(driver.Offset.Data + (i-2)*uint32(driver.BPRSector.SectorsPerCluster) + uint32(j))
+			//err := driver.WriteData(buf, uint64(i*uint32(driver.BPRSector.SectorsPerCluster)+uint32(j)), 0)
+			//if err != nil {
+			//	return err
+			//}
+		}
+	}
 	return nil
 }
 
 // readFATEntry 读取某号fat表项指向的fat表项
-func readFATEntry(driver *DefalutDriver, FATEntry uint32) (uint32, error) {
+func readFATEntry(driver *DefaultDriver, FATEntry uint32) (uint32, error) {
 	fatOffset := FATEntry * 4 / uint32(driver.BPRSector.BytesPerSector)
 	fatBufferOffset := fatOffset % 32
 	fatBufferBase := fatOffset - fatBufferOffset
@@ -255,7 +310,7 @@ func readFATEntry(driver *DefalutDriver, FATEntry uint32) (uint32, error) {
 }
 
 // getFATLink 依据一条fat表项获取整个fat link
-func getFATLink(driver *DefalutDriver, FATEntry uint32) ([]uint32, error) {
+func getFATLink(driver *DefaultDriver, FATEntry uint32) ([]uint32, error) {
 
 	i, err := readFATEntry(driver, FATEntry)
 	if err != nil {
@@ -273,8 +328,8 @@ func getFATLink(driver *DefalutDriver, FATEntry uint32) ([]uint32, error) {
 }
 
 // getDriveFactory driver工厂函数，返回driver实例
-func getDriveFactory(absFileName string) (*DefalutDriver, error) {
-	var driver DefalutDriver
+func getDriveFactory(absFileName string) (*DefaultDriver, error) {
+	var driver DefaultDriver
 	err := driver.DInit(absFileName)
 	if err != nil {
 		return nil, err
@@ -283,7 +338,7 @@ func getDriveFactory(absFileName string) (*DefalutDriver, error) {
 }
 
 // UpdateFAT 更新fat32表缓冲区
-func UpdateFAT(driver *DefalutDriver, fatOffset uint32) error {
+func UpdateFAT(driver *DefaultDriver, fatOffset uint32) error {
 	buffer, err := driver.ReadSector(uint64(driver.Offset.DEntry)+uint64(fatOffset), FAT32BufferSize)
 	if err != nil {
 		return err
@@ -324,6 +379,7 @@ func DeleteFile(absFileName string) error {
 
 	for _, fileName := range delFileList {
 		trimPath := strings.TrimPrefix(fileName, driver.Prefix+Segment)
+		fmt.Println(trimPath)
 		dEntry, dEntryOffset, err := getDirEntry(driver, trimPath)
 		if err != nil {
 			return err
@@ -333,5 +389,6 @@ func DeleteFile(absFileName string) error {
 			return err
 		}
 	}
+
 	return driver.DDestroy()
 }

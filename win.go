@@ -6,21 +6,25 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"golang.org/x/sys/windows"
+	"log"
 	"path/filepath"
-	"syscall"
 )
 
-// Segment 系统使用路径分隔符
-const Segment = `\`
+const (
+	FSCTL_LOCK_VOLUME   = 0x00090018 // FSCTL_LOCK_VOLUME 锁定卷的控制码
+	FSCTL_UNLOCK_VOLUME = 0x0009001C // FSCTL_UNLOCK_VOLUME 解锁卷的控制码
+	Segment             = `\`        // Segment 系统使用路径分隔符
+)
 
-type DefalutDriver struct {
-	Handle    syscall.Handle
+type DefaultDriver struct {
+	Handle    windows.Handle
 	Prefix    string
 	BPRSector *FAT32BootSector
 	Offset    *FAT32Offset
 }
 
-func (d *DefalutDriver) DInit(absFileName string) error {
+func (d *DefaultDriver) DInit(absFileName string) error {
 	var err error
 	volName := filepath.VolumeName(absFileName)
 	d.Handle, err = openPartition(volName)
@@ -40,7 +44,7 @@ func (d *DefalutDriver) DInit(absFileName string) error {
 	return UpdateFAT(d, 0)
 }
 
-func (d *DefalutDriver) ReadSector(sectorNum uint64, readNum uint16) ([]byte, error) {
+func (d *DefaultDriver) ReadSector(sectorNum uint64, readNum uint16) ([]byte, error) {
 	var bytesRead uint32
 	bufferSize := d.BPRSector.BytesPerSector * readNum
 	buffer := make([]byte, bufferSize)
@@ -49,36 +53,88 @@ func (d *DefalutDriver) ReadSector(sectorNum uint64, readNum uint16) ([]byte, er
 	offsetByte := uint64(d.BPRSector.BytesPerSector) * sectorNum
 	high := int32(offsetByte >> 32)
 	low := int32(offsetByte & 0xFFFFFFFF)
-	_, err := syscall.SetFilePointer(
+	_, err := windows.SetFilePointer(
 		d.Handle,
 		low,
 		&high,
-		syscall.FILE_BEGIN,
+		windows.FILE_BEGIN,
 	)
 	if err != nil {
 		return nil, err
 	}
 	// 读取扇区
-	err = syscall.ReadFile(d.Handle, buffer, &bytesRead, nil)
+	err = windows.ReadFile(d.Handle, buffer, &bytesRead, nil)
 	if err != nil {
 		return nil, err
 	}
 	return buffer[:bytesRead], nil
 }
 
-func (d *DefalutDriver) DDestroy() error {
-	return syscall.CloseHandle(d.Handle)
+func (d *DefaultDriver) WriteData(data []byte, sectorNum uint64, offset uint16) error {
+	err := lockVolume(d.Handle)
+	if err != nil {
+		return err
+	}
+	// 确保解锁卷
+	defer func() {
+		if err = unlockVolume(d.Handle); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	var buf []byte
+	if len(data) < int(d.BPRSector.BytesPerSector) {
+		// 创建写入缓冲区
+		buf, err = d.ReadSector(sectorNum, 1)
+		if err != nil {
+			return err
+		}
+		copy(buf[offset:], data)
+	} else if len(data) > int(d.BPRSector.BytesPerSector) {
+		return errors.New("data len longer than one sector")
+	} else {
+		buf = data
+	}
+
+	offsetByte := int64(d.BPRSector.BytesPerSector)*int64(sectorNum) + int64(offset)
+	high := int32(offsetByte >> 32)
+	low := int32(offsetByte & 0xFFFFFFFF)
+	_, err = windows.SetFilePointer(
+		d.Handle,
+		low,
+		&high,
+		windows.FILE_BEGIN,
+	)
+	if err != nil {
+		return err
+	}
+	var written uint32
+
+	err = windows.WriteFile(
+		d.Handle,
+		buf,
+		&written,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *DefaultDriver) DDestroy() error {
+	return windows.CloseHandle(d.Handle)
 }
 
 // openPartition 打开逻辑分区 示例 openPartition(`D:`)
-func openPartition(partitionName string) (syscall.Handle, error) {
+func openPartition(partitionName string) (windows.Handle, error) {
 	// 创建句柄
-	partitionHandle, err := syscall.CreateFile(
-		syscall.StringToUTF16Ptr(`\\.\`+partitionName),
-		syscall.GENERIC_READ,
-		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE,
+	partitionHandle, err := windows.CreateFile(
+		windows.StringToUTF16Ptr(`\\.\`+partitionName),
+		windows.GENERIC_ALL,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		nil,
-		syscall.OPEN_EXISTING,
+		windows.OPEN_EXISTING,
 		0,
 		0,
 	)
@@ -86,17 +142,16 @@ func openPartition(partitionName string) (syscall.Handle, error) {
 	if err != nil {
 		return 0, err
 	}
-
 	return partitionHandle, nil
 }
 
 // getBPR 读取FAT32引导扇区(BPR)
-func getBPR(handle syscall.Handle) (*FAT32BootSector, error) {
+func getBPR(handle windows.Handle) (*FAT32BootSector, error) {
 	var bytesRead uint32
 	var fat32BootSector FAT32BootSector
 	var buffer [512]byte
 	// 读取分卷的前512字节，即BPR，并解析到BPRSector中
-	err := syscall.ReadFile(handle, (&buffer)[:], &bytesRead, nil)
+	err := windows.ReadFile(handle, (&buffer)[:], &bytesRead, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -108,4 +163,40 @@ func getBPR(handle syscall.Handle) (*FAT32BootSector, error) {
 		return nil, err
 	}
 	return &fat32BootSector, nil
+}
+
+func lockVolume(handle windows.Handle) error {
+	var bytesReturned uint32
+	err := windows.DeviceIoControl(
+		handle,
+		FSCTL_LOCK_VOLUME,
+		nil,
+		0,
+		nil,
+		0,
+		&bytesReturned,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func unlockVolume(handle windows.Handle) error {
+	var bytesReturned uint32
+	err := windows.DeviceIoControl(
+		handle,
+		FSCTL_UNLOCK_VOLUME, // 解锁磁盘的控制代码
+		nil,
+		0,
+		nil,
+		0,
+		&bytesReturned,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	return nil
 }
