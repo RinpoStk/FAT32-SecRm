@@ -1,4 +1,4 @@
-module safeDelete
+module FAT32-SecRm
 
 go 1.22.7
 

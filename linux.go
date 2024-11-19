@@ -7,10 +7,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 const Segment = `/`
@@ -54,7 +54,7 @@ func (d *DefaultDriver) ReadSector(sectorNum uint64, readNum uint16) ([]byte, er
 	offsetByte := int64(d.BPRSector.BytesPerSector) * int64(sectorNum)
 
 	// 读取扇区
-	bytesRead, err := syscall.Pread(d.Fd, buffer, offsetByte)
+	bytesRead, err := unix.Pread(d.Fd, buffer, offsetByte)
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +62,8 @@ func (d *DefaultDriver) ReadSector(sectorNum uint64, readNum uint16) ([]byte, er
 }
 
 func (d *DefaultDriver) WriteData(data []byte, sectorNum uint64, offset uint16) error {
-	offsetByte := int64(offset) * int64(sectorNum) * int64(d.BPRSector.BytesPerSector)
-	_, err := syscall.Pwrite(d.Fd, data, offsetByte)
+	offsetByte := int64(offset) + int64(sectorNum)*int64(d.BPRSector.BytesPerSector)
+	_, err := unix.Pwrite(d.Fd, data, offsetByte)
 	if err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func (d *DefaultDriver) WriteData(data []byte, sectorNum uint64, offset uint16) 
 }
 
 func (d *DefaultDriver) DDestroy() error {
-	return syscall.Close(d.Fd)
+	return unix.Close(d.Fd)
 }
 
 // getMount 获取挂载点，驱动器名
@@ -124,7 +124,7 @@ func getMount(absFileName string) (string, string, error) {
 }
 
 func openFd(mountPoint string) (int, error) {
-	fd, err := syscall.Open(mountPoint, syscall.O_RDONLY, 0)
+	fd, err := unix.Open(mountPoint, unix.O_RDWR, 0)
 	if err != nil {
 		return -1, err
 	}
@@ -134,7 +134,7 @@ func openFd(mountPoint string) (int, error) {
 func getBPR(fd int) (*FAT32BootSector, error) {
 	buffer := make([]byte, 512)
 	// 读取分卷的前512字节，即BPR，并解析到BPRSector中
-	bytesRead, err := syscall.Read(fd, buffer)
+	bytesRead, err := unix.Read(fd, buffer)
 	if err != nil {
 		return nil, err
 	}

@@ -11,21 +11,21 @@ import (
 func main() {
 	// 创建一个 CLI 应用
 	app := &cli.App{
-		Name:    "FAT32Del",
-		Usage:   "a simple FAT32 file system delete tools",
+		Name:    "FAT32-SecRm",
+		Usage:   "A Tool to remove file in FAT32 filesystem",
 		Version: "0.0.1",
 
 		Commands: []*cli.Command{
 			{
-				Name:    "delete",
-				Aliases: []string{"d"},
-				Usage:   "delete file or directory",
+				Name:    "remove",
+				Aliases: []string{"r"},
+				Usage:   "remove file or directory",
 				Action: func(c *cli.Context) error {
 					// 解析参数
 					absFileName := c.Args().Get(0)
 					switch runtime.GOOS {
 					case "windows", "linux":
-						return DeleteFile(absFileName)
+						return RemoveFile(absFileName)
 					default:
 						return errors.New("not support right now")
 					}
