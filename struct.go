@@ -70,15 +70,15 @@ type FAT32Buffer struct {
 	Link   []uint32
 }
 
-type DirEntryBuffer struct {
-	// 存储32个扇区的目录表，可用 16 * 32 = 512 个目录项， 占用内存 32 * 512 = 16k
-	Number uint32
-	DEntry []*FAT32DirEntry
+type DirEntryOffset struct {
+	ClusterNumber uint32
+	Offset        uint16
 }
 
 // Driver 抽象驱动器结构，linux与win分别实现
 type Driver interface {
 	DInit(absFileName string) error
 	ReadSector(sectorNum uint64, readNum uint16) (buffer []byte, err error)
+	WriteData(data []byte, sectorNum uint64, offset uint16) error
 	DDestroy() error
 }

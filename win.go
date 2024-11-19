@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"path/filepath"
-	"strings"
 	"syscall"
 )
 
@@ -16,7 +15,7 @@ const Segment = `\`
 
 type DefalutDriver struct {
 	Handle    syscall.Handle
-	TrimPath  string
+	Prefix    string
 	BPRSector *FAT32BootSector
 	Offset    *FAT32Offset
 }
@@ -25,7 +24,7 @@ func (d *DefalutDriver) DInit(absFileName string) error {
 	var err error
 	volName := filepath.VolumeName(absFileName)
 	d.Handle, err = openPartition(volName)
-	d.TrimPath = strings.TrimPrefix(absFileName, volName+Segment)
+	d.Prefix = volName
 
 	if err != nil {
 		return err

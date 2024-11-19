@@ -16,19 +16,25 @@ import (
 const Segment = `/`
 
 type DefalutDriver struct {
-	fd        int
+	Fd        int
+	Prefix    string
 	BPRSector *FAT32BootSector
 	Offset    *FAT32Offset
 }
 
 func (d *DefalutDriver) DInit(absFileName string) error {
-	fd, err := openFd(absFileName)
+	device, mountPoint, err := getMount(absFileName)
 	if err != nil {
 		return err
 	}
-	d.fd = fd
+	d.Prefix = mountPoint
+	fd, err := openFd(device)
+	if err != nil {
+		return err
+	}
+	d.Fd = fd
 
-	d.BPRSector, err = getBPR(d.fd)
+	d.BPRSector, err = getBPR(d.Fd)
 	if err != nil {
 		return err
 	}
@@ -48,27 +54,37 @@ func (d *DefalutDriver) ReadSector(sectorNum uint64, readNum uint16) ([]byte, er
 	offsetByte := int64(d.BPRSector.BytesPerSector) * int64(sectorNum)
 
 	// 读取扇区
-	bytesRead, err := syscall.Pread(d.fd, buffer, offsetByte)
+	bytesRead, err := syscall.Pread(d.Fd, buffer, offsetByte)
 	if err != nil {
 		return nil, err
 	}
 	return buffer[:bytesRead], nil
 }
 
-func (d *DefalutDriver) DDestroy() error {
-	return syscall.Close(d.fd)
+func (d *DefalutDriver) WriteData(data []byte, sectorNum uint64, offset uint16) error {
+	offsetByte := int64(offset) * int64(sectorNum) * int64(d.BPRSector.BytesPerSector)
+	_, err := syscall.Pwrite(d.Fd, data, offsetByte)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func openFd(absFileName string) (int, error) {
+func (d *DefalutDriver) DDestroy() error {
+	return syscall.Close(d.Fd)
+}
+
+// getMount 获取挂载点，驱动器名
+func getMount(absFileName string) (string, string, error) {
 	// 解析挂载点
-	file, err := os.Open("/proc/mounts")
+	mounts, err := os.Open("/proc/mounts")
 	if err != nil {
-		return -1, err
+		return "", "", err
 	}
 	var mountPoints []string
 	var devices []string
 	// 逐行读取 /proc/mounts 并解析挂载点
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(mounts)
 	for scanner.Scan() {
 		line := scanner.Text()
 		fields := strings.Fields(line)
@@ -78,7 +94,7 @@ func openFd(absFileName string) (int, error) {
 		}
 	}
 	if err = scanner.Err(); err != nil {
-		return -1, err
+		return "", "", err
 	}
 	// 遍历找到最深的挂载点
 	var bestMatch string
@@ -89,7 +105,7 @@ func openFd(absFileName string) (int, error) {
 			// 检查是否为父目录
 			relPath, err := filepath.Rel(mountPoint, absFileName)
 			if err != nil {
-				return -1, err
+				return "", "", err
 			}
 			if !strings.HasPrefix(relPath, "..") {
 				bestMatch = mountPoint
@@ -97,15 +113,18 @@ func openFd(absFileName string) (int, error) {
 			}
 		}
 	}
-
 	if bestMatch == "" {
-		return -1, errors.New("no mount point found")
+		return "", "", errors.New("no mount point found")
 	}
-	err = file.Close()
+	err = mounts.Close()
 	if err != nil {
-		return -1, err
+		return "", "", err
 	}
-	fd, err := syscall.Open(devices[index], syscall.O_RDONLY, 0)
+	return devices[index], bestMatch, nil
+}
+
+func openFd(mountPoint string) (int, error) {
+	fd, err := syscall.Open(mountPoint, syscall.O_RDONLY, 0)
 	if err != nil {
 		return -1, err
 	}
