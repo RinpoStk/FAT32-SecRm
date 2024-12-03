@@ -187,10 +187,10 @@ func findDirEntry(driver *DefaultDriver, dEntryLL []uint32, targetFile string) (
 
 func doRemoveFile(driver *DefaultDriver, dEntry *FAT32DirEntry, dEntryOffsets []*DirEntryOffset) error {
 	if dEntry.ClusterHigh == 0 && dEntry.ClusterLow == 0 { // 空文件
-		// err := rmDEntry(driver, dEntryOffsets)
-		// if err != nil {
-		// 	return err
-		// }
+		err := rmDEntry(driver, dEntryOffsets)
+		if err != nil {
+			return err
+		}
 	} else {
 		fat32LL, err := getFATLink(driver, (uint32(dEntry.ClusterHigh)<<16)+uint32(dEntry.ClusterLow))
 		sort.Slice(fat32LL, func(i, j int) bool {
